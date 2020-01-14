@@ -16,12 +16,17 @@
 #include "fg-alg.h"
 #include "qg-defs.h"
 
+#define NTC_COMP_HIGH_TEMP		500
+#define NTC_COMP_LOW_TEMP		200
+#define TEMP_COMP_TIME			5
+
 struct qg_batt_props {
 	const char		*batt_type_str;
 	int			float_volt_uv;
 	int			vbatt_full_mv;
 	int			fastchg_curr_ma;
 	int			qg_profile_version;
+	int			nom_cap_uah;
 };
 
 struct qg_irq_info {
@@ -79,6 +84,9 @@ struct qg_dt {
 	bool			multi_profile_load;
 	bool			tcss_enable;
 	bool			bass_enable;
+	bool            temp_battery_id;
+	bool			qg_page0_unused;
+	bool			ffc_iterm_change_by_temp;
 };
 
 struct qg_esr_data {
@@ -88,6 +96,22 @@ struct qg_esr_data {
 	u32			post_esr_i;
 	u32			esr;
 	bool			valid;
+};
+
+#define BATT_MA_AVG_SAMPLES	8
+struct batt_params {
+	bool			update_now;
+	int			batt_raw_soc;
+	int			batt_soc;
+	int			samples_num;
+	int			samples_index;
+	int			batt_ma_avg_samples[BATT_MA_AVG_SAMPLES];
+	int			batt_ma_avg;
+	int			batt_ma_prev;
+	int			batt_ma;
+	int			batt_mv;
+	int			batt_temp;
+	struct timespec		last_soc_change_time;
 };
 
 struct qpnp_qg {
@@ -102,10 +126,25 @@ struct qpnp_qg {
 	struct cdev		qg_cdev;
 	struct device_node	*batt_node;
 	dev_t			dev_no;
+	struct batt_params	param;
+	struct delayed_work	soc_monitor_work;
+	struct delayed_work	force_shutdown_work;
 	struct work_struct	udata_work;
 	struct work_struct	scale_soc_work;
 	struct work_struct	qg_status_change_work;
 	struct delayed_work	qg_sleep_exit_work;
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+	struct delayed_work	battery_authentic_work;
+	int			battery_authentic_result;
+	struct delayed_work	ds_romid_work;
+	unsigned char		ds_romid[8];
+	struct delayed_work	ds_status_work;
+	unsigned char		ds_status[8];
+	struct delayed_work	ds_page0_work;
+	unsigned char		ds_page0[16];
+	struct delayed_work	profile_load_work;
+	bool				profile_judge_done;
+#endif
 	struct notifier_block	nb;
 	struct mutex		bus_lock;
 	struct mutex		data_lock;
@@ -126,10 +165,14 @@ struct qpnp_qg {
 	struct power_supply	*usb_psy;
 	struct power_supply	*dc_psy;
 	struct power_supply	*parallel_psy;
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+	struct power_supply *max_verify_psy;
+#endif
 	struct qg_esr_data	esr_data[QG_MAX_ESR_COUNT];
 
 	/* status variable */
 	u32			*debug_mask;
+	bool			force_shutdown;
 	bool			qg_device_open;
 	bool			profile_loaded;
 	bool			battery_missing;
@@ -145,6 +188,7 @@ struct qpnp_qg {
 	bool			fvss_active;
 	bool			tcss_active;
 	bool			bass_active;
+	bool			fastcharge_mode_enabled;
 	int			charge_status;
 	int			charge_type;
 	int			chg_iterm_ma;
@@ -203,6 +247,20 @@ struct qpnp_qg {
 	struct cycle_counter	*counter;
 	/* ttf */
 	struct ttf		*ttf;
+
+	/*battery temp compensation for F4 with diff ibat*/
+	int			batt_ntc_comp;
+	int			obj_temp;
+	int			report_temp;
+	int			last_ibat;
+	int			real_temp;
+	int			max_temp_comp_value;
+	int			temp_comp_hysteresis;
+	int			temp_comp_num;
+	int			step_index;
+	bool			temp_comp_cfg_valid;
+	bool			temp_comp_enable;
+	struct range_data	*temp_comp_cfg;
 };
 
 struct ocv_all {
@@ -259,5 +317,10 @@ enum qg_wa_flags {
 	QG_PON_OCV_WA = BIT(3),
 };
 
-
+enum batt_temp_comp {
+	NTC_NO_COMP = 0,
+	NTC_LOW_COMP = 2,
+	NTC_MID_COMP = 4,
+	NTC_HIGH_COMP = 6,
+};
 #endif /* __QG_CORE_H__ */
