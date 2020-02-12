@@ -113,6 +113,13 @@ static void vote_min(struct votable *votable, int client_id,
 			*eff_id = i;
 		}
 	}
+#if (defined CONFIG_MACH_XIAOMI_F10) || (defined CONFIG_MACH_XIAOMI_G7B)
+	if (strcmp(votable->name, "QG_WS") != 0) {
+			if(votable->votes[i].enabled)
+				pr_info("%s: val: %d\n", votable->client_strs[i],
+							votable->votes[i].value);
+	}
+#endif
 	if (*eff_id == -EINVAL)
 		*eff_res = -EINVAL;
 }
